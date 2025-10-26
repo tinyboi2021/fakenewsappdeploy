@@ -4,29 +4,25 @@ import os
 from pathlib import Path
 import gdown
 
-# Imports from transformers *after* the model files are available
-def try_import_transformers():
+# Lazy import to avoid issues before files present
+def import_transformers():
     global AutoTokenizer, AutoModelForSequenceClassification
-    import importlib
-    transformers = importlib.import_module("transformers")
-    AutoTokenizer = getattr(transformers, "AutoTokenizer")
-    AutoModelForSequenceClassification = getattr(transformers, "AutoModelForSequenceClassification")
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-# --- Google Drive Settings ---
-GOOGLE_DRIVE_FOLDER_ID = "1Xgg_vwh2pVrsi4rzHFymnrXvr0RfU3-M"  # Replace with your actual folder ID
+# --- Google Drive Model Folder ---
+GOOGLE_DRIVE_FOLDER_ID = "1Xgg_vwh2pVrsi4rzHFymnrXvr0RfU3-M"  # Your actual folder ID
 MODEL_FOLDER = "./BertFinalModel"
 
 @st.cache_resource
 def download_and_load_model():
-    # Make sure the folder exists
     Path(MODEL_FOLDER).mkdir(parents=True, exist_ok=True)
     config_path = os.path.join(MODEL_FOLDER, "config.json")
 
+    # Download model if necessary
     if not os.path.exists(config_path):
         with st.spinner("Downloading model from Google Drive..."):
             url = f"https://drive.google.com/drive/folders/{GOOGLE_DRIVE_FOLDER_ID}"
             try:
-                # gdown requires the folder to be public and accessible
                 gdown.download_folder(
                     url=url,
                     output=MODEL_FOLDER,
@@ -37,19 +33,18 @@ def download_and_load_model():
             except Exception as e:
                 st.error(f"Failed to download model: {e}")
                 st.stop()
-
-    # Imports from transformers only after files are available
-    try_import_transformers()
+    # Import after files are present
+    import_transformers()
     try:
         tokenizer = AutoTokenizer.from_pretrained(MODEL_FOLDER)
         model = AutoModelForSequenceClassification.from_pretrained(MODEL_FOLDER)
-        labels = model.config.id2label
+        labels = {0: "TRUE NEWS", 1: "FAKE NEWS"}  # Explicit label mapping
         return tokenizer, model, labels
     except Exception as e:
         st.error(f"Error loading model: {e}")
         st.stop()
 
-def classify_text(text, tokenizer, model, labels):
+def classify_text(text, tokenizer, model):
     import torch
     inputs = tokenizer(
         text,
@@ -63,17 +58,14 @@ def classify_text(text, tokenizer, model, labels):
     logits = outputs.logits
     pred_idx = int(torch.argmax(logits, dim=1).item())
     confidence = float(torch.softmax(logits, dim=1)[0][pred_idx].item())
-    label = labels[pred_idx] if isinstance(labels, dict) else str(pred_idx)
-    return label, confidence
+    return pred_idx, confidence
 
 st.set_page_config(page_title="Fake News Detector", layout="centered")
 st.title("🔍 Fake News Detector")
 st.markdown("---")
 
-# Model loading
-tokenizer, model, labels = download_and_load_model()
+tokenizer, model, label_map = download_and_load_model()
 
-# Input section
 st.markdown("### Enter Text to Classify")
 text_input = st.text_area(
     "Paste your news article or text here:",
@@ -85,14 +77,17 @@ if st.button("🚀 Classify Text", use_container_width=True):
     if text_input.strip():
         with st.spinner("⏳ Analyzing..."):
             time.sleep(0.5)
-            prediction, confidence = classify_text(
-                text_input, tokenizer, model, labels
+            pred_idx, confidence = classify_text(
+                text_input, tokenizer, model
             )
+        pred_label = label_map.get(pred_idx, f"Label {pred_idx}")
         st.markdown("### 📊 Results")
-        if prediction.upper() == "FAKE":
-            st.error(f"🚨 Prediction: {prediction}")
+        if pred_idx == 1:
+            st.error(f"🚨 Prediction: {pred_label}")
+        elif pred_idx == 0:
+            st.success(f"✅ Prediction: {pred_label}")
         else:
-            st.success(f"✅ Prediction: {prediction}")
+            st.warning(f"Prediction: {pred_label}")
         st.metric(label="Confidence", value=f"{confidence*100:.2f}%")
     else:
         st.warning("Please enter text to classify.")
