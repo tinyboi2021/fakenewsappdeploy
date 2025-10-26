@@ -1,141 +1,140 @@
 import streamlit as st
 import time
+import os
+from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
+import gdown
 
-# --- This is your final, corrected model path ---
-MODEL_FOLDER = r"C:\Users\pauls\Downloads\Mini_Project Demo\BertFinalModel\BertFinalModel" 
-# --- ---
+# --- Google Drive model folder ID ---
+GOOGLE_DRIVE_FOLDER_ID = "1Xgg_vwh2pVrsi4rzHFymnrXvr0RfU3-M"  # Replace with your folder ID
+MODEL_FOLDER = "https://drive.google.com/drive/folders/1Xgg_vwh2pVrsi4rzHFymnrXvr0RfU3-M?usp=drive_link"
 
 @st.cache_resource
-def load_model(folder_path):
+def load_model():
     """
-    Loads the saved Hugging Face model and tokenizer from a local folder.
+    Downloads the model from Google Drive (if not already cached) and loads it.
     """
+    model_path = Path(MODEL_FOLDER)
+    model_path.mkdir(exist_ok=True)
+    
+    # Check if model files exist locally
+    config_path = model_path / "config.json"
+    
+    if not config_path.exists():
+        with st.spinner("📥 Downloading model from Google Drive (first time only)..."):
+            try:
+                # Download folder from Google Drive
+                gdown.download_folder(
+                    id=GOOGLE_DRIVE_FOLDER_ID,
+                    output=MODEL_FOLDER,
+                    quiet=False,
+                    use_cookies=False
+                )
+                st.success("✅ Model downloaded successfully!")
+            except Exception as e:
+                st.error(f"❌ Error downloading model: {e}")
+                st.stop()
+    
     try:
         # Load the tokenizer and model from the specified folder
-        tokenizer = AutoTokenizer.from_pretrained(folder_path)
-        model = AutoModelForSequenceClassification.from_pretrained(folder_path)
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_FOLDER)
+        model = AutoModelForSequenceClassification.from_pretrained(MODEL_FOLDER)
         
-        # Get label mappings from the model's config (e.g., 0: "TRUE", 1: "FAKE")
+        # Get label mappings from the model's config
         labels = model.config.id2label
         
         return tokenizer, model, labels
-    
+        
     except OSError as e:
-        # This error happens if the folder path is wrong
-        st.error(f"Error: Model folder not found at '{folder_path}'.")
-        st.error(f"Please make sure this path is correct. Full error: {e}")
+        st.error(f"❌ Error: Model files not found at '{MODEL_FOLDER}'.")
+        st.error(f"Please ensure the Google Drive folder ID is correct. Error: {e}")
         st.stop()
     except Exception as e:
-        # This catches other errors, like the 'model_type' error
-        st.error(f"An error occurred while loading the model: {e}")
-        st.error("This often means the 'config.json' file is missing 'model_type': 'bert'. Please see the instructions.")
+        st.error(f"❌ Error loading model: {e}")
         st.stop()
 
-# --- Load the Model ---
-# This will only run once at the start
-model_data = load_model(MODEL_FOLDER)
-
-if model_data:
-    tokenizer, model, id2label = model_data
-    
-    # --- STREAMLIT UI ---
-    
-    st.set_page_config(page_title="Fake News Detector", page_icon="📰")
-
-    st.title("📰 Fake News Detector")
-    st.markdown(
-        "Enter a news headline or article text below to check if it's likely true or fake."
+def classify_text(text, tokenizer, model, labels):
+    """
+    Classifies text as True or Fake news using the BERT model.
+    """
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True,
+        max_length=512,
+        padding=True
     )
+    
+    with torch.no_grad():
+        outputs = model(**inputs)
+    
+    logits = outputs.logits
+    prediction = torch.argmax(logits, dim=1).item()
+    confidence = torch.softmax(logits, dim=1)[0][prediction].item()
+    
+    return labels[prediction], confidence
 
-    # Text area for user input
-    user_input = st.text_area(
-        "Enter news text here:", 
-        "", 
-        height=200,
-        placeholder="e.g., 'Scientists discover new planet made entirely of diamond...'"
-    )
+# --- Streamlit UI ---
+st.set_page_config(page_title="Fake News Detector", layout="centered")
+st.title("🔍 Fake News Detector")
+st.markdown("---")
 
-    # Analyze button
-    if st.button("Analyze News", type="primary"):
-        if user_input:
-            # Show a spinner while processing
-            with st.spinner("Analyzing..."):
-                
-                # 1. Tokenize the user input
-                inputs = tokenizer(
-                    user_input, 
-                    return_tensors="pt", 
-                    truncation=True, 
-                    padding=True, 
-                    max_length=512
-                )
-                
-                # 2. Make a prediction
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                
-                # 3. Get the raw prediction scores (logits)
-                logits = outputs.logits
-                
-                # 4. Convert logits to probabilities
-                probabilities = torch.softmax(logits, dim=1)
-                
-                # 5. Get the most likely class index and its confidence
-                confidence = probabilities.max().item() * 100
-                prediction_index = torch.argmax(probabilities, dim=1).item()
+# Load model
+tokenizer, model, labels = load_model()
 
-            # 4. Display the result
+# Input section
+st.markdown("### Enter Text to Classify")
+text_input = st.text_area(
+    "Paste your news article or text here:",
+    height=200,
+    placeholder="Enter the text you want to analyze..."
+)
+
+# Classify button
+if st.button("🚀 Classify Text", use_container_width=True):
+    if text_input.strip():
+        with st.spinner("⏳ Analyzing..."):
+            time.sleep(0.5)  # Brief delay for UX
             
-            label_name = ""
-            if id2label:
-                # Use the label name from the model's config (e.g., "FAKE" or "TRUE")
-                label_name = id2label[prediction_index]
-            else:
-                # Fallback if no labels are in the config
-                label_name = f"Class {prediction_index}"
-                st.warning(f"Model config does not contain 'id2label' mappings. Displaying raw class index.")
-                st.warning("Using index 0 as 'TRUE' and index 1 as 'FAKE' as requested.")
-
-            # --- YOUR FINAL LABEL LOGIC ---
-            # You stated that Label 1 is "Fake" and Label 0 is "True".
-            
-            # Check if the predicted index is 0 (TRUE News)
-            if prediction_index == 0:
-                st.success(f"**Prediction: TRUE News**")
-                st.write(f"Confidence: {confidence:.2f}%")
-            # Check if the predicted index is 1 (FAKE News)
-            elif prediction_index == 1:
-                st.error(f"**Prediction: FAKE News**")
-                st.write(f"Confidence: {confidence:.2f}%")
-            else:
-                # A fallback for any other unexpected labels
-                st.warning(f"**Prediction: {label_name or prediction_index}**")
-                st.write(f"Confidence: {confidence:.2f}%")
-            # --- End of final logic ---
-                    
+            prediction, confidence = classify_text(
+                text_input, 
+                tokenizer, 
+                model, 
+                labels
+            )
+        
+        # Display results
+        st.markdown("### 📊 Results")
+        
+        # Color-coded prediction
+        if prediction == "FAKE":
+            st.error(f"🚨 **Prediction: {prediction}**")
         else:
-            # Show a warning if the text area is empty
-            st.warning("Please enter some text to analyze.")
-
-    # --- Sidebar with instructions ---
-    st.sidebar.header("How to Run")
-    st.sidebar.markdown(
-        f"""
-        1.  Save this file as `app.py`.
-        2.  Save the `requirements.txt` file in the same folder.
-        3.  Install dependencies: `pip install -r requirements.txt`
-        4.  Run the app: `streamlit run app.py`
-        """
-    )
-    st.sidebar.header("Your Model Path")
-    st.sidebar.code(MODEL_FOLDER, language="text")
+            st.success(f"✅ **Prediction: {prediction}**")
+        
+        # Confidence bar
+        st.metric(
+            label="Confidence",
+            value=f"{confidence*100:.2f}%"
+        )
+        
+        # Detailed analysis
+        st.markdown("#### Detailed Analysis")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write(f"**Classification:** {prediction}")
+        with col2:
+            st.write(f"**Confidence Score:** {confidence:.4f}")
     
-    st.sidebar.header("Label Configuration")
-    st.sidebar.info(
-        "This app is configured for your model:\n"
-        "* **Label 0 = TRUE News (Green)**\n"
-        "* **Label 1 = FAKE News (Red)**"
-    )
+    else:
+        st.warning("⚠️ Please enter some text to classify!")
 
+st.markdown("---")
+st.markdown(
+    "<div style='text-align: center; color: gray; font-size: 12px;'>"
+    "Built with Streamlit & BERT | Fake News Detection System"
+    "</div>",
+    unsafe_allow_html=True
+)
